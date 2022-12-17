@@ -137,7 +137,7 @@ download_episode() {
     local endpoint="$ANIME_URL-episode-$episode_index"
     local title="$ANIME_URL-$episode_index"
     local path="$HOME/.cache/atsu/$title"
-    if [ -f "$path/base.m3u8" ]; then
+    if [ -f "$path/base.m3u8" ] && [ ! -z "$player" ]; then
         echo "[+] Episode $episode_index already downloaded. If it is corrupted, you"
         echo "can run: \$ rm -rf $HOME/.cache/atsu/$title"
         $player "$path/base.m3u8"
@@ -152,8 +152,12 @@ download_episode() {
     cat "$path/base.m3u8" | grep -Eo '^[^#].*\.ts$' | sed -e "s|^|$base_url|" > "$path/urls.txt"
     echo "[+] Downloading all M3U8 segments for this episode"
     aria2c $DL_OPTIONS -d "$path" -i "$path/urls.txt"
-    $player "$path/$title/base.m3u8"
+    if [ ! -z "$player" ]; then
+        echo "[+] Playing episode $episode_index..."
+        $player "$path/base.m3u8"
+    fi
 }
 
 search_anime "$search_term"
 download_episode
+
