@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+
+# atsu - A simple bash script for searching anime episodes from terminal and playing it
+#        through mpv.
+# Licensed under the MIT License - file: /LICENSE
+
+show_help() {
+    echo "Usage: atsu [options]"
+    echo "Options:"
+    echo "  -h, --help          Show this help message and exit"
+    echo "  -s, --search <term> Search for anime episodes and return its URL stream"
+    echo "  -i, --index <index> The episode number to be searched on"
+    echo "  -p, --play <player> Mark the player to be used to play the episode."
+}
+
+# Check if pup is installed.
+if ! command -v pup &> /dev/null
+then
+    echo "[!] pup could not be found. Please install it first."
+    exit -1
+fi
+
+# Check if jq is installed.
+if ! command -v jq &> /dev/null
+then
+    echo "[!] jq could not be found. Please install it first."
+    exit -1
+fi
+
+# Check if aria2 is installed.
+if ! command -v aria2c &> /dev/null
+then
+    echo "[!] aria2 could not be found. Please install it first."
+    exit -1
+fi
+
+# The term/keyword to be searched on.
+search_term=""
+
+# The episode number to be searched on.
+episode_index=""
+
+# The player to be used to play the episode.
+player=""
+
+# Loop into the given arguments and match them with short or long options.
+while (( "$#" )); do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0 ;;
+        -s|--search)
+            search_term="$2"
+            shift 2 ;;
+        -i|--index)
+            episode_index="$2"
+            shift 2 ;;
+        -p|--play)
+            if [ -z "$2" ]; then
+                if command -v umpv &> /dev/null; then
+                    player="umpv"
+                elif command -v mpv &> /dev/null; then
+                    player="mpv"
+                else
+                    echo "[!] No player found. Please install mpv or umpv."
+                    exit -1
+                fi
+                shift
+            else
+                player="$2"
+                shift 2
+            fi ;;
+        *)
+            echo "Invalid option: $1"
+            show_help
+            exit 1 ;;
+    esac
+done
+
+# Check if the search term is empty.
+if [ -z "$search_term" ]; then
+    echo "[!] Please provide a search term."
+    show_help
+    exit 1
+fi
+
+# Check if the episode index is empty.
+if [ -z "$episode_index" ]; then
+    echo "[!] Please provide an episode index."
+    show_help
+    exit 1
+fi
+
+BASE_URL="https://gogoanime.tel"
+SEARCH_BASE_URL="$BASE_URL/search.html?keyword"
+STREAM_BASE_URL="https://api.consumet.org/anime/gogoanime/watch"
+DL_OPTIONS="--console-log-level=error --continue=true -x 16 -s 16 -j 16"
+
+# Allow the user to find an episode url from the first 5 results
+search_anime() {
+    local url_friendly_term=$(jq -rn --arg term "$1" '$term|@uri')
+    local search_url="$SEARCH_BASE_URL=$url_friendly_term"
+    local response=$(curl -s "$search_url")
+    local urls="$(echo "$response" | pup 'ul > li > .name > a attr{href}')"
+    local titles="$(echo "$response" | pup 'ul > li > .name > a text{}')"
+    echo "[+] Search term: $1"
+    # check if there's more than 1 url
+    if [ "$(echo "$urls" | wc -l)" -gt 1 ]; then
+        echo "Found more than 1 result. Please choose one to watch:"
+        for i in {1..5}; do
+            local title="$(echo "$titles" | sed -n "${i}p")"
+            if [ -z "$title" ]; then
+                break
+            fi
+            local url="$(echo "$urls" | sed -n "${i}p")"  
+            echo "  $i) $title"
+        done
+        read -p "Select an option (1..5) [1]: " option
+        if [ -z "$option" ]; then
+            option=1
+        fi
+        if [ "$option" -gt 5 ] || [ "$option" -lt 1 ]; then
+            echo "[!] Invalid anime index given."
+            exit 1
+        fi
+        ANIME_URL="$(echo "$urls" | sed -n "${option}p" | sed -e 's/.*\///')"
+        ANIME_TITLE="$(echo "$titles" | sed -n "${option}p")"
+    else
+        ANIME_URL="$(echo "$urls" | sed -n 1p | sed -e 's/.*\///')"
+        ANIME_TITLE="$(echo "$titles" | sed -n 1p)"
+    fi
+    local episode_count=$(curl -s "$BASE_URL/category/$ANIME_URL" | pup 'ul#episode_page > li > a text{}')
+    echo "[+] Selected series: $ANIME_TITLE ($episode_count)"
+}
+
+download_episode() {
+    local endpoint="$ANIME_URL-episode-$episode_index"
+    local title="$ANIME_URL-$episode_index"
+    local path="$HOME/.cache/atsu/$title"
+    if [ -f "$path/base.m3u8" ]; then
+        echo "[+] Episode $episode_index already downloaded. If it is corrupted, you"
+        echo "can run: \$ rm -rf $HOME/.cache/atsu/$title"
+        $player "$path/base.m3u8"
+        return
+    fi
+    echo "[+] Downloading base episode index for $episode_index..."
+    local url="$STREAM_BASE_URL/$endpoint"
+    local source="$(curl -s "$url" | jq -r ".sources[-3].url")"
+    mkdir -p "$path"
+    aria2c $DL_OPTIONS --download-result=hide -d "$path" -o "base.m3u8" "$source"
+    local base_url="$(echo "$source" | sed -e 's/\/[^\/]*$/\//')"
+    cat "$path/base.m3u8" | grep -Eo '^[^#].*\.ts$' | sed -e "s|^|$base_url|" > "$path/urls.txt"
+    echo "[+] Downloading all M3U8 segments for this episode"
+    aria2c $DL_OPTIONS -d "$path" -i "$path/urls.txt"
+    $player "$path/$title/base.m3u8"
+}
+
+search_anime "$search_term"
+download_episode
