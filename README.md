@@ -12,6 +12,11 @@ Watch anime from the command line
 -   [aria2] - Download manager
 -   [mpv] or any other video player
 
+[pup]: https://github.com/ericchiang/pup
+[jq]: https://stedolan.github.io/jq/
+[aria2]: https://aria2.github.io/
+[mpv]: https://mpv.io/
+
 ```bash
 git clone https://code.axyria.dev/atsu
 doas cp ./atsu/atsu /usr/local/bin
