@@ -7,31 +7,33 @@
 show_help() {
     echo "Usage: atsu [options]"
     echo "Options:"
-    echo "  -h, --help          Show this help message and exit"
-    echo "  -s, --search <term> Search for anime episodes and return its URL stream"
-    echo "  -i, --index <index> The episode number to be searched on"
-    echo "  -p, --play <player> Mark the player to be used to play the episode."
+    echo "  -h, --help            Show this help message and exit."
+    echo "  -s, --search <term>   Search for anime episodes and play it."
+    echo "  -i, --index <index>   The episode number to be searched on. You can set it to"
+    echo "                        'all' to search for all episodes."
+    echo "  -p, --player <player> The media player used to play the anime. Default is mpv,"
+    echo "                        or umpv if available."
 }
 
 # Check if pup is installed.
 if ! command -v pup &> /dev/null
 then
-    echo "[!] pup could not be found. Please install it first."
-    exit -1
+    echo "[!] pup could not be found. Please install it first." >&2
+    exit 1
 fi
 
 # Check if jq is installed.
 if ! command -v jq &> /dev/null
 then
-    echo "[!] jq could not be found. Please install it first."
-    exit -1
+    echo "[!] jq could not be found. Please install it first." >&2
+    exit 1
 fi
 
 # Check if aria2 is installed.
 if ! command -v aria2c &> /dev/null
 then
-    echo "[!] aria2 could not be found. Please install it first."
-    exit -1
+    echo "[!] aria2 could not be found. Please install it first." >&2
+    exit 1
 fi
 
 # The term/keyword to be searched on.
@@ -47,48 +49,68 @@ player=""
 while (( "$#" )); do
     case $1 in
         -h|--help)
-            show_help
+            show_help >&2
             exit 0 ;;
         -s|--search)
-            search_term="$2"
-            shift 2 ;;
-        -i|--index)
-            episode_index="$2"
-            shift 2 ;;
-        -p|--play)
-            if [ -z "$2" ]; then
-                if command -v umpv &> /dev/null; then
-                    player="umpv"
-                elif command -v mpv &> /dev/null; then
-                    player="mpv"
-                else
-                    echo "[!] No player found. Please install mpv or umpv."
-                    exit -1
-                fi
-                shift
-            else
-                player="$2"
+            if [ -n "$2" ] && [ ${2:0:1} != "-" ]; then
+                search_term=$2
                 shift 2
+            else
+                echo "[!] Error: Argument for $1 is missing" >&2
+                exit 1
+            fi ;;
+        -i|--index)
+            if [[ $2 =~ ^[0-9]+$ ]] || [ "$2" == "all" ]; then
+                episode_index=$2
+                shift 2
+            else
+                echo "[!] Error: Argument for $1 is missing. It can be either a number or 'all'." >&2
+                exit 1
+            fi ;;
+        -p|--player)
+            if [ -n "$2" ] && [ ${2:0:1} != "-" ]; then
+                if command -v $2 &> /dev/null; then
+                    player=$2
+                    shift 2
+                else
+                    echo "[!] Error: Player '$2' could not be found." >&2
+                    exit 1
+                fi
+            else
+                shift
             fi ;;
         *)
             echo "Invalid option: $1"
-            show_help
+            show_help >&2
             exit 1 ;;
     esac
 done
 
 # Check if the search term is empty.
 if [ -z "$search_term" ]; then
-    echo "[!] Please provide a search term."
+    echo "[!] Please provide a search term." >&2
     show_help
     exit 1
 fi
 
 # Check if the episode index is empty.
 if [ -z "$episode_index" ]; then
-    echo "[!] Please provide an episode index."
+    echo "[!] Please provide an episode index." >&2
     show_help
     exit 1
+fi
+
+# Check if the player is empty.
+if [ -z "$player" ]; then
+    echo "[+] Argument for '--player' is missing. Falling back to umpv or mpv."
+    if command -v umpv &> /dev/null; then
+        player="umpv"
+    elif command -v mpv &> /dev/null; then
+        player="mpv"
+    else
+        echo "[!] No player found. Please install mpv or umpv." >&2
+        exit 1
+    fi
 fi
 
 BASE_URL="https://gogoanime.tel"
@@ -129,18 +151,19 @@ search_anime() {
         ANIME_URL="$(echo "$urls" | sed -n 1p | sed -e 's/.*\///')"
         ANIME_TITLE="$(echo "$titles" | sed -n 1p)"
     fi
-    local episode_count=$(curl -s "$BASE_URL/category/$ANIME_URL" | pup 'ul#episode_page > li > a text{}')
-    echo "[+] Selected series: $ANIME_TITLE ($episode_count)"
+    echo "[+] Selected series: $ANIME_TITLE"
+}
+
+episode_count() {
+    curl -s "$BASE_URL/category/$ANIME_URL" | pup 'ul#episode_page > li > a text{}' | sed -e 's/.*-//'
 }
 
 download_episode() {
     local endpoint="$ANIME_URL-episode-$episode_index"
     local title="$ANIME_URL-$episode_index"
     local path="$HOME/.cache/atsu/$title"
-    if [ -f "$path/base.m3u8" ] && [ ! -z "$player" ]; then
-        echo "[+] Episode $episode_index already downloaded. If it is corrupted, you"
-        echo "can run: \$ rm -rf $HOME/.cache/atsu/$title"
-        $player "$path/base.m3u8"
+    if [ -f "$path/.successful" ]; then
+        echo "[+] Episode $episode_index already downloaded. Skipping..."
         return
     fi
     echo "[+] Downloading base episode index for $episode_index..."
@@ -152,12 +175,36 @@ download_episode() {
     cat "$path/base.m3u8" | grep -Eo '^[^#].*\.ts$' | sed -e "s|^|$base_url|" > "$path/urls.txt"
     echo "[+] Downloading all M3U8 segments for this episode"
     aria2c $DL_OPTIONS -d "$path" -i "$path/urls.txt"
-    if [ ! -z "$player" ]; then
-        echo "[+] Playing episode $episode_index..."
-        $player "$path/base.m3u8"
-    fi
+    rm -f "$path/urls.txt"
+    touch "$path/.successful"
 }
 
 search_anime "$search_term"
-download_episode
 
+# Check if the given episode index is between the range of episodes.
+if [ "$episode_index" == "all" ]; then
+    echo "[+] Downloading all episodes..."
+    for i in $(seq 1 $(episode_count)); do
+        episode_index=$i
+        download_episode
+    done
+else
+    if [ "$episode_index" -gt $(episode_count) ] || [ "$episode_index" -lt 1 ]; then
+        echo "[!] Invalid episode index given '$episode_index'. Make sure it is between 1 and $(episode_count)."
+        exit 1
+    fi
+    download_episode
+fi
+
+# Append all the base episode paths to a file. It is given by the expression below:
+# $HOME/.cache/atsu/$ANIME_URL-episode-*/base.m3u8, where a file called .successful
+# exists in the same directory.
+EPISODES=()
+for file in "$HOME"/.cache/atsu/"$ANIME_URL"-episode-*; do
+    if [ -f "$file/.successful" ]; then
+        EPISODES+=("$file/base.m3u8")
+    else
+        echo "[!] Episode $file is not fully downloaded or is corrupt. Skipping..."
+    fi
+done
+$player "${EPISODES[@]}"
