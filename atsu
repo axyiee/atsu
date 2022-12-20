@@ -200,7 +200,7 @@ fi
 # $HOME/.cache/atsu/$ANIME_URL-episode-*/base.m3u8, where a file called .successful
 # exists in the same directory.
 EPISODES=()
-for file in "$HOME"/.cache/atsu/"$ANIME_URL"-episode-*; do
+for file in "$HOME"/.cache/atsu/"$ANIME_URL"-*; do
     if [ -f "$file/.successful" ]; then
         EPISODES+=("$file/base.m3u8")
     else
