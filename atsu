@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# atsu - A simple bash script for searching anime episodes from terminal and playing it
+# atsu - A simple bash script for searching anime episodes from terminal and playing them
 #        through mpv.
 # Licensed under the MIT License - file: /LICENSE
 
@@ -8,10 +8,10 @@ show_help() {
     echo "Usage: atsu [options]"
     echo "Options:"
     echo "  -h, --help            Show this help message and exit."
-    echo "  -s, --search <term>   Search for anime episodes and play it."
+    echo "  -s, --search <term>   Search for anime episodes and play them."
     echo "  -i, --index <index>   The episode number to be searched on. You can set it to"
     echo "                        'all' to search for all episodes."
-    echo "  -p, --player <player> The media player used to play the anime. Default is mpv,"
+    echo "  -p, --player <player> The media player used to play multimedia. Default is mpv,"
     echo "                        or umpv if available."
 }
 
@@ -122,7 +122,7 @@ DL_OPTIONS="--console-log-level=error --continue=true -x 16 -s 16 -j 16"
 search_anime() {
     local url_friendly_term=$(jq -rn --arg term "$1" '$term|@uri')
     local search_url="$SEARCH_BASE_URL=$url_friendly_term"
-    local response=$(curl -s "$search_url")
+    local response=$(curl -4 -s "$search_url")
     local urls="$(echo "$response" | pup 'ul > li > .name > a attr{href}')"
     local titles="$(echo "$response" | pup 'ul > li > .name > a text{}')"
     echo "[+] Search term: $1"
@@ -155,7 +155,7 @@ search_anime() {
 }
 
 episode_count() {
-    curl -s "$BASE_URL/category/$ANIME_URL" | pup 'ul#episode_page > li > a text{}' | sed -e 's/.*-//'
+    curl -4 -s "$BASE_URL/category/$ANIME_URL" | pup 'ul#episode_page > li > a text{}' | sed -e 's/.*-//'
 }
 
 download_episode() {
@@ -168,7 +168,7 @@ download_episode() {
     fi
     echo "[+] Downloading base episode index for $episode_index..."
     local url="$STREAM_BASE_URL/$endpoint"
-    local source="$(curl -s "$url" | jq -r ".sources[-3].url")"
+    local source="$(curl -4 -s "$url" | jq -r ".sources[-3].url")"
     mkdir -p "$path"
     aria2c $DL_OPTIONS --download-result=hide -d "$path" -o "base.m3u8" "$source"
     local base_url="$(echo "$source" | sed -e 's/\/[^\/]*$/\//')"
@@ -182,17 +182,19 @@ download_episode() {
 search_anime "$search_term"
 
 # Check if the given episode index is between the range of episodes.
+count=$(episode_count)
 if [ "$episode_index" == "all" ]; then
     echo "[+] Downloading all episodes..."
-    for i in $(seq 1 $(episode_count)); do
+    for i in $(seq 1 $count); do
         episode_index=$i
         download_episode
     done
 else
-    if [ "$episode_index" -gt $(episode_count) ] || [ "$episode_index" -lt 1 ]; then
-        echo "[!] Invalid episode index given '$episode_index'. Make sure it is between 1 and $(episode_count)."
+    if [ "$episode_index" -gt $count ] || [ "$count" -lt 1 ]; then
+        echo "[!] Invalid episode index given '$episode_index'. Make sure it is between 1 and $count."
         exit 1
     fi
+    echo "[|] Episode count: $count"
     download_episode
 fi
 
@@ -200,11 +202,12 @@ fi
 # $HOME/.cache/atsu/$ANIME_URL-episode-*/base.m3u8, where a file called .successful
 # exists in the same directory.
 EPISODES=()
+rm -f "~/.cache/atsu/playlist.txt"
 for file in "$HOME"/.cache/atsu/"$ANIME_URL"-*; do
     if [ -f "$file/.successful" ]; then
-        EPISODES+=("$file/base.m3u8")
+        echo "$file/base.m3u8" >> "$HOME/.cache/atsu/playlist.txt"
     else
         echo "[!] Episode $file is not fully downloaded or is corrupt. Skipping..."
     fi
 done
-$player "${EPISODES[@]}"
+$player --playlist="$HOME/.cache/atsu/playlist.txt"

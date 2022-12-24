@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+
+# yatsu - A simple bash script for searching YouTube videos from terminal and playing it
+#        through mpv.
+# Licensed under the MIT License - file: /LICENSE
+
+show_help() {
+    echo "Usage: yatsu [options]"
+    echo "Options:"
+    echo "  -h, --help            Show this help message and exit."
+    echo "  -s, --search <term>   Search for YouTube videos and play them."
+    echo "  -p, --player <player> The media player used to play multimedia. Default is mpv,"
+    echo "                        or umpv if available."
+}
+
+# Check if pup is installed.
+if ! command -v pup &> /dev/null
+then
+    echo "[!] pup could not be found. Please install it first." >&2
+    exit 1
+fi
+
+# Check if jq is installed.
+if ! command -v jq &> /dev/null
+then
+    echo "[!] jq could not be found. Please install it first." >&2
+    exit 1
+fi
+
+
+# Check if yt-dlp is installed.
+if ! command -v yt-dlp &> /dev/null
+then
+    echo "[!] yt-dlp could not be found. Please install it first." >&2
+    exit 1
+fi
+
+
+# The term/keyword to be searched on.
+search_term=""
+
+# The player to be used to play the episode.
+player=""
+
+# Loop into the given arguments and match them with short or long options.
+while (( "$#" )); do
+    case $1 in
+        -h|--help)
+            show_help >&2
+            exit 0 ;;
+        -s|--search)
+            if [ -n "$2" ] && [ ${2:0:1} != "-" ]; then
+                search_term=$2
+                shift 2
+            else
+                echo "[!] Error: Argument for $1 is missing" >&2
+                exit 1
+            fi ;;
+        -p|--player)
+            if [ -n "$2" ] && [ ${2:0:1} != "-" ]; then
+                if command -v $2 &> /dev/null; then
+                    player=$2
+                    shift 2
+                else
+                    echo "[!] Error: Player '$2' could not be found." >&2
+                    exit 1
+                fi
+            else
+                shift
+            fi ;;
+        *)
+            echo "Invalid option: $1"
+            show_help >&2
+            exit 1 ;;
+    esac
+done
+
+# Check if the search term is empty.
+if [ -z "$search_term" ]; then
+    echo "[!] Please provide a search term." >&2
+    show_help
+    exit 1
+fi
+
+# Check if the player is empty.
+if [ -z "$player" ]; then
+    echo "[+] Argument for '--player' is missing. Falling back to umpv or mpv."
+    if command -v umpv &> /dev/null; then
+        player="umpv"
+    elif command -v mpv &> /dev/null; then
+        player="mpv"
+    else
+        echo "[!] No player found. Please install mpv or umpv." >&2
+        exit 1
+    fi
+fi
+
+# The url for the Invidious instance. We can use any instance, but I prefer retrieving it
+# through a smart redirecting gateway like Farside.
+USER_AGENT="Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36"
+BASE_URL="$(curl -4 -A "$USER_AGENT" -I https://farside.link/invidious/ 2>/dev/null | grep -i location | cut -d' ' -f2 | tr -d '\r')"
+echo "[+] Using Invidious instance: ${BASE_URL}"
+
+# The options for downloading the media.
+RESOLUTION_HEIGHT=$(xrandr | grep '*' | cut -d' ' -f4 | cut -d'x' -f2)
+DOWNLOAD_OPTIONS="ytdl-format=bestvideo[height<=?$RESOLUTION_HEIGHT][fps<=?60][vcodec!=?vp9][protocol!=http_dash_segments]+bestaudio/best"
+
+# Search for a YouTube video or playlist
+SEARCH_BASE_URL="${BASE_URL}search?q="
+search() {
+    local search_url="$SEARCH_BASE_URL$(jq -rn --arg term "$1" '$term|@uri')"
+    local response=$(curl -4 -s "$search_url" | pup 'div.h-box')
+    local urls=$(echo "$response" | pup 'a attr{href}' | grep -E "^/(watch|playlist)\?(v|list)=" | cut -d'&' -f1 | uniq)
+    local titles="$(echo "$response" | pup 'a[style="width:100%"] p[dir="auto"] text{}' | awk NF)"
+    local index=0
+    local wrap_to="[10, playlist]"
+    for current in $urls; do
+        if [ $index -eq 8 ]; then
+            break
+        fi
+        index=$((index+1))
+        local kind=$(echo "$current" | cut -d'/' -f2 | cut -d'?' -f1)
+        local prefix=$(printf "%-16s" "[$index, $kind]")
+        echo "$prefix $(echo "$titles" | head -n $index | tail -n 1 | xargs)"
+    done
+    case $index in
+        0)
+            echo "[!] No results found." >&2
+            exit 1 ;;
+        1)
+            echo "[+] Playing the only result."
+            VIDEO_URL="$BASE_URL$urls" ;;
+        *)
+            read -p "Select an option to play (1..8) [1]: " option
+            if [ -z "$option" ]; then
+                option=1
+            fi
+            if [ $option -lt 1 ] || [ $option -gt 8 ]; then
+                echo "[!] Invalid video index given." >&2
+                exit 1
+            fi
+            local endpoint=$(echo "$urls" | sed -n "$option"p)
+            VIDEO_URL="$BASE_URL${endpoint:1}" ;;
+    esac
+    echo "[+] Selected URI: $VIDEO_URL"
+}
+
+download_media() {
+    local response=$(curl -4 -s "$VIDEO_URL")
+    uuid=$(echo "$VIDEO_URL" | cut -d'=' -f2)
+    output_dir="$HOME/.cache/yatsu/$uuid"
+    if [ -f "$output_dir/.successful" ]; then
+        echo "[+] Found cached media for $uuid."
+        return
+    fi
+    mkdir -p "$output_dir"
+    if echo "$VIDEO_URL" | grep -q "playlist"; then
+        echo "[+] Playlist detected. Scrapping video list..."
+        local urls=$(echo "$response" | pup 'a attr{href}' | grep -E "^/watch\?v=" | cut -d'&' -f1 | uniq)
+        local titles="$(echo "$response" | pup 'a[style="width:100%"] p[dir="auto"] text{}' | awk NF)"
+        index=0
+        echo "$urls" | while read -r url; do
+            index=$((index+1))
+            title=$(echo "$titles" | head -n $index | tail -n 1 | xargs)
+            local youtube_endpoint="https://youtube.com/watch?v=$(echo "$url" | cut -d'=' -f2 | cut -d'&' -f1)"
+            echo "[+] Downloading video (from playlist) '$title' ($youtube_endpoint) to '$output_dir'..."
+            yt-dlp -o "$output_dir/$title.%(ext)s" -f "$DOWNLOAD_OPTIONS" "$youtube_endpoint"
+        done
+    else
+        local youtube_endpoint="https://youtube.com/watch?v=$uuid"
+        echo "[+] Downloading video '$title' ($youtube_endpoint) to '$output_dir'..."
+        yt-dlp -o "$output_dir/$title.%(ext)s" $DOWNLOAD_OPTIONS "$youtube_endpoint"
+    fi
+    touch "$output_dir/.successful"
+}
+
+search "$search_term"
+download_media
+
+if [ -f "$output_dir/.successful" ]; then
+    echo "[+] Playing media..."
+    rm -f "$output_dir/playlist.txt"
+    for file in "$output_dir"/*.mp4; do
+        echo "$file" >> "$output_dir/playlist.txt"
+    done
+    $player --playlist="$output_dir/playlist.txt"
+fi
+
