@@ -155,23 +155,13 @@ download_media() {
     fi
     mkdir -p "$output_dir"
     if echo "$VIDEO_URL" | grep -q "playlist"; then
-        echo "[+] Playlist detected. Scrapping video list..."
-        local urls=$(echo "$response" | pup 'a attr{href}' | grep -E "^/watch\?v=" | cut -d'&' -f1 | uniq)
-        local titles="$(echo "$response" | pup 'a[style="width:100%"] p[dir="auto"] text{}' | awk NF)"
-        index=0
-        echo "$urls" | while read -r url; do
-            index=$((index+1))
-            title=$(echo "$titles" | head -n $index | tail -n 1 | xargs)
-            local youtube_endpoint="https://youtube.com/watch?v=$(echo "$url" | cut -d'=' -f2 | cut -d'&' -f1)"
-            echo "[+] Downloading video (from playlist) '$title' ($youtube_endpoint) to '$output_dir'..."
-            yt-dlp -o "$output_dir/$title.%(ext)s" -f "$DOWNLOAD_OPTIONS" "$youtube_endpoint"
-        done
+        echo "[+] Downloading playlist '$VIDEO_URL' to '$output_dir/'..."
+        yt-dlp -ciw -o "$output_dir/%(playlist_index)s-%(title)s.%(ext)s" $DOWNLOAD_OPTIONS "$VIDEO_URL"
     else
-        local youtube_endpoint="https://youtube.com/watch?v=$uuid"
-        echo "[+] Downloading video '$title' ($youtube_endpoint) to '$output_dir'..."
-        yt-dlp -o "$output_dir/$title.%(ext)s" $DOWNLOAD_OPTIONS "$youtube_endpoint"
+        echo "[+] Downloading video '$VIDEO_URL' to '$output_dir/'..."
+        yt-dlp -ciw -o "$output_dir/1-$title.%(ext)s" $DOWNLOAD_OPTIONS "$VIDEO_URL"
     fi
-    touch "$output_dir/.successful"
+    echo ".done" > "$output_dir/.successful"
 }
 
 search "$search_term"
@@ -179,10 +169,16 @@ download_media
 
 if [ -f "$output_dir/.successful" ]; then
     echo "[+] Playing media..."
-    rm -f "$output_dir/playlist.txt"
-    for file in "$output_dir"/*.mp4; do
-        echo "$file" >> "$output_dir/playlist.txt"
-    done
-    $player --playlist="$output_dir/playlist.txt"
+    if [[ $player == *umpv ]]; then
+        for file in "$output_dir"/*.mp4; do
+            $player "$file"
+        done
+    else
+        rm -f "$output_dir/playlist.txt"
+        for file in "$output_dir"/*.mp4; do
+            echo "$file" >> "$output_dir/playlist.txt"
+        done
+        $player --playlist="$output_dir/playlist.txt"
+    fi
 fi
 

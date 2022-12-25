@@ -198,6 +198,18 @@ else
     download_episode
 fi
 
+# playing through umpv
+if [[ $player == *umpv ]]; then
+    for file in "$HOME/.cache/atsu/$ANIME_URL"-*; do
+        if [ -f "$file/.successful" ]; then
+            $player "$file"
+        else
+            echo "[!] umpv mode: Episode $file is not fully downloaded or is corrupt. Skipping..."
+        fi
+    done
+    exit 0
+fi
+
 # Append all the base episode paths to a file. It is given by the expression below:
 # $HOME/.cache/atsu/$ANIME_URL-episode-*/base.m3u8, where a file called .successful
 # exists in the same directory.
