@@ -182,7 +182,11 @@ download_episode() {
 search_anime "$search_term"
 
 # Check if the given episode index is between the range of episodes.
-count=$(episode_count)
+count="$(episode_count)"
+if [ -z "$count" ]; then
+	echo "[!] Failed to find results for '$search_term'."
+	exit 1
+fi
 if [ "$episode_index" == "all" ]; then
     echo "[+] Downloading all episodes..."
     for i in $(seq 1 $count); do
@@ -198,9 +202,11 @@ else
     download_episode
 fi
 
+readarray -d '' entries < <(printf '%s\0' "$HOME/.cache/atsu/$ANIME_URL"-* | sort -zV)
+
 # playing through umpv
 if [[ $player == *umpv ]]; then
-    for file in "$HOME/.cache/atsu/$ANIME_URL"-*; do
+    for file in "${entries[@]}"; do
         if [ -f "$file/.successful" ]; then
             $player "$file"
         else
@@ -214,8 +220,8 @@ fi
 # $HOME/.cache/atsu/$ANIME_URL-episode-*/base.m3u8, where a file called .successful
 # exists in the same directory.
 EPISODES=()
-rm -f "~/.cache/atsu/playlist.txt"
-for file in "$HOME"/.cache/atsu/"$ANIME_URL"-*; do
+echo '' > "$HOME/.cache/atsu/playlist.txt"
+for file in "${entries[@]}"; do
     if [ -f "$file/.successful" ]; then
         echo "$file/base.m3u8" >> "$HOME/.cache/atsu/playlist.txt"
     else
